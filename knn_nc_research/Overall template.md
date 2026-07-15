@@ -6,15 +6,15 @@ This document provides a consolidated comparison of all nine datasets analysed f
 
 ## Individual Dataset Analyses
 
-1. [Iris](Result analysis-iris.md[Result analysis-iris.md](Result%20analysis-iris.md))
-2. [Ecoli](Result analysis-ecoli.md)
-3. [Glass](Result analysis-glass.md)
-4. [Hepatitis](Result analysis-hepatitis.md)
-5. [Ionosphere](Result analysis-ionosphere.md)
-6. [Lenses](Result analysis-lenses.md)
-7. [Lung Cancer](Result analysis-lung_cancer.md)
-8. [Soybean](Result analysis-soybean.md)
-9. [Wine](Result analysis-wine.md)
+1. [Iris](Result%20analysis-iris.md)
+2. [Ecoli](Result%20analysis-ecoli.md)
+3. [Glass](Result%20analysis-glass.md)
+4. [Hepatitis](Result%20analysis-hepatitis.md)
+5. [Ionosphere](Result%20analysis-ionosphere.md)
+6. [Lenses](Result%20analysis-lenses.md)
+7. [Lung Cancer](Result%20analysis-lung-cancer.md)
+8. [Soybean](Result%20analysis-soybean.md)
+9. [Wine](Result%20analysis-wine.md)
 
 ---
 
