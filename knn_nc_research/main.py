@@ -1,257 +1,264 @@
 # -*- coding: utf-8 -*-
-"""
-main.py
-=======
-Demonstration script for the KNN vs NC Research Framework.
-
-A Critique of:
-    "Comparative Analysis Between the Traditional and Nearest Centroid
-     Methods in the K-Nearest Neighbor Algorithm"
-    Mladenova & Valova, IEEE HORA 2022
-
-This file shows the clean API by composing objects and calling methods.
-There is no CLI, no argparse, no menus — just a readable script.
-
-Run:
-    python main.py
-"""
-
 import warnings
-warnings.filterwarnings("ignore")
-
+import numpy as np
+from scipy.stats import skew, kurtosis
+from sklearn.mixture import GaussianMixture
+from sklearn.model_selection import StratifiedKFold
+from sklearn.neighbors import KNeighborsClassifier, NearestCentroid
+from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 import pandas as pd
 
-# ── Datasets ──────────────────────────────────────────────────────────────────
-from datasets import IrisDataset, WineDataset, IonosphereDataset
 
-# ── Statistical tests ─────────────────────────────────────────────────────────
-from statistical_tests import (
-    NormalityTest,
-    UnimodalityTest,
-    SkewnessTest,
-    KurtosisTest,
-    SeparabilityTest,
-)
+def prepare(df, target_col, dataset_name):
+    df = df.dropna().reset_index(drop=True)
 
-# ── Visualisations ────────────────────────────────────────────────────────────
-from visualization import (
-    Histogram,
-    QQPlot,
-    PCAScatter,
-    BoxPlot,
-    DensityPlot,
-    SummaryHeatmap,
-)
+    # 2. Isolate the feature dataframe by dropping the target column
+    feature_df = df.drop(columns=[target_col])
 
-# ── Synthetic generators ──────────────────────────────────────────────────────
-from synthesis import (
-    CentralTendencyGenerator,
-    NormalGenerator,
-    MultimodalGenerator,
-    SkewedGenerator,
-    UniformGenerator,
-    HeavyTailGenerator,
-    ImbalancedGenerator,
-    NonCentralGenerator,
-    MixedGenerator,
-)
+    # 3. Identify columns dropped because they are not numeric
+    numeric_df = feature_df.select_dtypes(include=[np.number])
+    non_numeric_dropped = [col for col in feature_df.columns if col not in numeric_df.columns]
 
-# ── Experiments ───────────────────────────────────────────────────────────────
-from experiments import KNNvsNCExperiment, DistributionSweepExperiment
+    # 4. Combine all dropped columns for logging (Target + Non-numeric)
+    all_dropped_cols = [target_col] + non_numeric_dropped
+    dropped_string = ", ".join(all_dropped_cols)
+
+    # 5. Print the formatted result string
+    print(f"Dataset: {dataset_name} | Dropped Columns: {dropped_string}")
+
+    # 6. Extract raw values for your ML models
+    X = numeric_df.values
+    y = LabelEncoder().fit_transform(df[target_col].values)
+    return X, y
 
 
 
+def evaluate_cv(X, y, k=5, n_splits=10, n_repeats=10):
+    min_class = np.bincount(y).min()
+    n_splits = min(n_splits, min_class)
+    if n_splits <= 1:
+        n_splits = 2
+    knn_accs, nc_accs = [], []
+    for r in range(n_repeats):
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=r)
+        for tr, te in skf.split(X, y):
+            sc = StandardScaler()
+            Xtr = sc.fit_transform(X[tr])
+            Xte = sc.transform(X[te])
+
+            knn_accs.append(
+                accuracy_score(y[te],
+                    KNeighborsClassifier(k).fit(Xtr, y[tr]).predict(Xte))
+            )
+            # suppress the zero-std warning — it is a known data property
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                nc_accs.append(
+                    accuracy_score(y[te],
+                        NearestCentroid().fit(Xtr, y[tr]).predict(Xte))
+                )
+    return np.mean(knn_accs), np.mean(nc_accs)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 1 — Load Real Datasets
-# ══════════════════════════════════════════════════════════════════════════════
+# ── measure functions (all on RAW unscaled X) ─────────────────────────────────
 
-iris     = IrisDataset()
-df_iris  = iris.load()
-print("\nIris:", iris.summary())
-
-wine     = WineDataset()
-df_wine  = wine.load()
-print("Wine:", wine.summary())
-
-iono     = IonosphereDataset()
-df_iono  = iono.load()
-print("Ionosphere:", iono.summary())
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 2 — Statistical Tests (Iris, per-class)
-# ══════════════════════════════════════════════════════════════════════════════
+def measure_skewness(X, y):
+    """
+    Mean absolute skewness across all features and classes.
+    Computed on raw X — scaling removes the shape we want to measure.
+    Skips constant features (std=0) to avoid NaN.
+    """
+    vals = []
+    for c in np.unique(y):
+        Xc = X[y == c]
+        for f in range(Xc.shape[1]):
+            col = Xc[:, f]
+            if col.std() > 0:                  # skip constant columns
+                vals.append(abs(skew(col)))
+    return round(np.mean(vals), 4) if vals else np.nan
 
 
-for cls in iris.class_labels():
-    subset = iris.class_subset(cls)
-    print(f"\n--- Class: {cls} (n={len(subset)}) ---")
-
-    # Normality
-    r = NormalityTest(subset, alpha=0.05).run_test()
-    print(f"  Normality    HZ={r['hz_statistic']}  p={r['p_value']}  "
-          f"Normal={r['is_normal']}")
-
-    # Unimodality
-    r = UnimodalityTest(subset, alpha=0.05).run_test()
-    print(f"  Unimodality  {r['pct_unimodal']}% of features unimodal")
-
-    # Skewness
-    r = SkewnessTest(subset, threshold=1.0).run_test()
-    print(f"  Skewness     {r['pct_near_normal']}% near-normal  "
-          f"→ {r['overall_interpretation']}")
-
-    # Kurtosis
-    r = KurtosisTest(subset, threshold=2.0).run_test()
-    print(f"  Kurtosis     {r['pct_near_normal']}% near-normal  "
-          f"→ {r['overall_interpretation']}")
-
-# Separability — needs full df with labels
-r = SeparabilityTest(df_iris, target_col="target").run_test()
-print(f"\nSeparability (all class pairs):")
-print(f"  Avg ratio: {r['avg_ratio']}")
-print(f"  → {r['overall_interpretation']}")
-for pair in r["pair_results"]:
-    print(f"    {pair['interpretation']}")
+def measure_kurtosis(X, y):
+    """
+    Mean absolute excess kurtosis across all features and classes.
+    Computed on raw X. Skips constant features.
+    """
+    vals = []
+    for c in np.unique(y):
+        Xc = X[y == c]
+        for f in range(Xc.shape[1]):
+            col = Xc[:, f]
+            if col.std() > 0:
+                vals.append(abs(kurtosis(col)))
+    return round(np.mean(vals), 4) if vals else np.nan
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 3 — Visualisations (Iris)
-# ══════════════════════════════════════════════════════════════════════════════
+def measure_separability(X, y):
+    """
+    Mean pairwise centroid distance normalised by mean within-class std.
+    Computed on StandardScaled X so feature scale does not bias distances.
+    """
+    Xs = StandardScaler().fit_transform(X)
+    classes   = np.unique(y)
+    centroids = [Xs[y == c].mean(axis=0) for c in classes]
+    within_std = np.mean([Xs[y == c].std() for c in classes])
 
-print("\nHistogram + KDE ...")
-Histogram(df_iris, target_col="target",
-          title="Iris — Histogram + KDE", bins=12).draw()
-
-print("Density Plot ...")
-DensityPlot(df_iris, target_col="target",
-            title="Iris — KDE Density").draw()
-
-print("Q-Q Plots ...")
-QQPlot(df_iris, target_col="target",
-       title="Iris — Q-Q Plots").draw()
-
-print("PCA 2D Scatter ...")
-PCAScatter(df_iris, target_col="target",
-           title="Iris — PCA 2D").draw()
-
-print("Box Plots ...")
-BoxPlot(df_iris, target_col="target",
-        title="Iris — Box Plots").draw()
+    dists = [
+        np.linalg.norm(centroids[i] - centroids[j])
+        for i in range(len(classes))
+        for j in range(i + 1, len(classes))
+    ]
+    return round(np.mean(dists) / (within_std + 1e-9), 4)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 4 — Synthetic Data Generation
-# ══════════════════════════════════════════════════════════════════════════════
+def measure_compactness(X, y):
+    """
+    Mean within-class std across all features and classes.
+    Computed on StandardScaled X. Lower = more compact.
+    """
+    Xs = StandardScaler().fit_transform(X)
+    vals = []
+    for c in np.unique(y):
+        Xc = Xs[y == c]
+        vals.extend(Xc[:, f].std() for f in range(Xc.shape[1]))
+    return round(np.mean(vals), 4)
 
 
-generators = [
-    ("Central Tendency",   CentralTendencyGenerator(n_samples=600, spread=0.3,   separation=8.0)),
-    ("Normal",             NormalGenerator(n_samples=600,          separation=4.0)),
-    ("Uniform",            UniformGenerator(n_samples=600,         class_width=4.0)),
-    ("Skewed",             SkewedGenerator(n_samples=600,          skewness=1.5)),
-    ("Heavy-Tailed",       HeavyTailGenerator(n_samples=600,       degrees_of_freedom=2)),
-    ("Multimodal",         MultimodalGenerator(n_samples=600,      modes_per_class=2)),
-    ("Imbalanced",         ImbalancedGenerator(n_samples=600,      imbalance_ratio=5.0)),
-    ("Non-Central",        NonCentralGenerator(n_samples=600,      spread=3.5, separation=1.5)),
-    ("Mixed Features",     MixedGenerator(n_samples=600,           n_features=6)),
-]
-
-synthetic_dfs = {}
-for name, gen in generators:
-    df = gen.generate()
-    synthetic_dfs[name] = df
-    counts = df["target"].value_counts().to_dict()
-    print(f"  {name:<22} shape={df.shape}  classes={counts}")
-
-# Show PCA scatter for Central Tendency vs Non-Central side by side
-print("\nPCA — Central Tendency (NC ideal):")
-PCAScatter(synthetic_dfs["Central Tendency"],
-           title="Central Tendency — PCA 2D").draw()
-
-print("PCA — Non-Central (NC should fail):")
-PCAScatter(synthetic_dfs["Non-Central"],
-           title="Non-Central (Scattered) — PCA 2D").draw()
-
-print("PCA — Multimodal:")
-PCAScatter(synthetic_dfs["Multimodal"],
-           title="Multimodal — PCA 2D").draw()
+def measure_modality(X, y, max_components=6):
+    """
+    Per class: fit GMMs 1..max_components, pick best by BIC.
+    Returns mean best n_components across classes.
+    Higher = more multimodal. Computed on StandardScaled X.
+    """
+    Xs = StandardScaler().fit_transform(X)
+    best_ns = []
+    for c in np.unique(y):
+        Xc = Xs[y == c]
+        if len(Xc) < max_components * 2:
+            best_ns.append(1)
+            continue
+        bics = []
+        for n in range(1, max_components + 1):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    gm = GaussianMixture(n, random_state=42, n_init=3).fit(Xc)
+                    bics.append((gm.bic(Xc), n))
+            except Exception:
+                break
+        if bics:
+            best_ns.append(min(bics, key=lambda x: x[0])[1])
+    return round(np.mean(best_ns), 2) if best_ns else np.nan
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 5 — KNN vs NC on Individual Scenarios
-# ══════════════════════════════════════════════════════════════════════════════
+# ── main entry point ──────────────────────────────────────────────────────────
+
+def run_full_profile(datasets, k=5):
+    """
+    Parameters
+    ----------
+    datasets : list of (df, target_col, dataset_name)
+    k        : KNN neighbours (default 5, same as paper)
+
+    Returns
+    -------
+    pd.DataFrame — one row per dataset, all measures + accuracy
+    """
+    rows = []
+    for df, target_col, name in datasets:
+        print(f"  Processing {name}...", end=" ", flush=True)
+        X, y = prepare(df, target_col, name)
+
+        row = {
+            "dataset":      name,
+            "n_samples":    X.shape[0],
+            "n_features":   X.shape[1],
+            "n_classes":    len(np.unique(y)),
+            # --- measures on RAW X ---
+            "skewness":     measure_skewness(X, y),
+            "kurtosis":     measure_kurtosis(X, y),
+            # --- measures on SCALED X ---
+            "separability": measure_separability(X, y),
+            "compactness":  measure_compactness(X, y),
+            "modality":     measure_modality(X, y),
+        }
+
+        knn_acc, nc_acc = evaluate_cv(X, y, k=k)
+        row["knn_acc"]      = round(knn_acc, 4)
+        row["nc_acc"]       = round(nc_acc,  4)
+        row["gap (NC-KNN)"] = round(nc_acc - knn_acc, 4)
+        rows.append(row)
+        print("done")
+
+    result = pd.DataFrame(rows)
 
 
-key_scenarios = [
-    ("Central Tendency (NC ideal)",    synthetic_dfs["Central Tendency"]),
-    ("Normal",                         synthetic_dfs["Normal"]),
-    ("Multimodal (NC broken)",         synthetic_dfs["Multimodal"]),
-    ("Skewed",                         synthetic_dfs["Skewed"]),
-    ("Non-Central (NC worst case)",    synthetic_dfs["Non-Central"]),
-    ("Ionosphere (real, from paper)",  df_iono),
-]
+    sep = "=" * 100
 
-summary_rows = []
+    print(f"\n{sep}")
+    print("DISTRIBUTIONAL MEASURES  (skewness & kurtosis on raw X; rest on scaled X)")
+    print(sep)
+    profile_cols = ["dataset", "n_samples", "n_features", "n_classes",
+                    "skewness", "kurtosis", "separability", "compactness", "modality"]
+    print(result[profile_cols].to_string(index=False))
 
-for label, df in key_scenarios:
-    exp    = KNNvsNCExperiment(df, k=5, cv_folds=10)
-    result = exp.run()
+    print(f"\n{sep}")
+    print("CLASSIFIER RESULTS  (10-fold CV × 10 repeats, k=5)")
+    print(sep)
+    print(result[["dataset", "knn_acc", "nc_acc", "gap (NC-KNN)"]].to_string(index=False))
 
-    knn_acc = result["knn_summary"]["accuracy_mean"]
-    nc_acc  = result["nc_summary"]["accuracy_mean"]
-    knn_f1  = result["knn_summary"]["f1_mean"]
-    nc_f1   = result["nc_summary"]["f1_mean"]
-    gap     = round(knn_acc - nc_acc, 4)
-    winner  = "KNN" if gap > 0.001 else ("NC" if gap < -0.001 else "Tie")
+    print(f"\n{sep}")
+    print("CORRELATION — each measure vs gap (NC-KNN)")
+    print(sep)
+    measures = ["skewness", "kurtosis", "separability", "compactness", "modality"]
+    for m in measures:
+        col = result[m].dropna()
+        gap_col = result.loc[col.index, "gap (NC-KNN)"]
+        if len(col) >= 2 and col.std() > 0:
+            r = col.corr(gap_col)
+            direction = "NC worse as ↑" if r < 0 else "NC better as ↑"
+            print(f"  {m:<15}  r = {r:+.3f}   ({direction})")
+        else:
+            print(f"  {m:<15}  r = N/A  (not enough variance)")
 
-    print(f"\n  {label}")
-    print(result["comparison_df"].to_string())
+    return result
 
-    summary_rows.append({
-        "Scenario":         label,
-        "KNN Acc":          knn_acc,
-        "NC Acc":           nc_acc,
-        "KNN F1":           knn_f1,
-        "NC F1":            nc_f1,
-        "Acc Gap (KNN-NC)": gap,
-        "Winner":           winner,
-    })
+if __name__ == "__main__":
 
+    lenses_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\lenses.csv")
+    lung_cancer_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\lung_cancer.csv")
+    soybean_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\soybean.csv")
+    srbct = None
+    cryotherapy = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\cryotherapy.csv")
+    beavers = None
+    irish_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\iris.csv")
+    hepatitis_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\hepatitis.csv")
+    wine_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\wine.csv")
+    glass_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\glass.csv")
+    thyroid_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\thyroid.csv")
+    stars = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\stars.csv")
+    algerian_fires = None
+    ecoli_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\ecoli.csv")
+    ionosphere_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\ionosphere.csv")
+    breast_cancer = None
+    absence_df = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\absenteeism_at_work.csv", sep = ';')
+    pima_diabetes = pd.read_csv(r"E:\ATU-Masters\Semester 2 ( research paper )\thesis-comparaive-analysis-knn-nc\knn_nc_research\data\diabetes.csv")
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 6 — Full Distribution Sweep
-# ══════════════════════════════════════════════════════════════════════════════
+    run_full_profile([
+        (ecoli_df, "target", "Ecoli"),
+        (glass_df, "target", "Glass"),
+        (hepatitis_df, "target", "Hepatitis"),
+        (ionosphere_df, "target", "Ionosphere"),
+        (irish_df, "target", "Iris"),
+        (lenses_df, "target", "Lenses"),
+        (lung_cancer_df, "target", "Lungcancer"),
+        (soybean_df, "target", "Soybean"),
+        (wine_df, "target", "Wine"),
+        (absence_df, "Absenteeism time in hours", "Absence"),
+        (thyroid_df, "target", "Thyroid"),
+        (cryotherapy, "Result_of_Treatment", "Cryotherapy"),
+        (stars, "Type", "Stars"),
+        (pima_diabetes, "Outcome", "Diabetes"),
+    ])
 
-sweep   = DistributionSweepExperiment(n_samples=600, n_features=4,
-                                       n_classes=2, k=5, cv_folds=10)
-results = sweep.run()
-
-print("\n--- Full Sweep Comparison Table ---")
-print(results["comparison"].to_string())
-
-wc = results["winner_counts"]
-print(f"\nWinner counts across all scenarios:")
-print(f"  KNN wins : {wc['KNN']}")
-print(f"  NC wins  : {wc['NC']}")
-print(f"  Ties     : {wc['Tie']}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 7 — Summary Visualisation
-# ══════════════════════════════════════════════════════════════════════════════
-
-sweep_df = results["comparison"]
-
-SummaryHeatmap(
-    sweep_df,
-    heatmap_cols=["KNN Acc", "NC Acc", "KNN F1", "NC F1"],
-    bar_col="Acc Gap (KNN-NC)",
-    title="KNN vs NC — Full Distribution Sweep Summary",
-    vmin=0.0,
-    vmax=1.0,
-).draw()
-
-print("\nAll sections complete.")
